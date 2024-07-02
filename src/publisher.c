@@ -3,16 +3,16 @@
 //
 
 #include <arpa/inet.h>
+#include <netdb.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
-struct arguments {
-    char *role, *topic, *host;
-    unsigned short port;
-};
+#include "main.h"
 
-int publisher(struct arguments arguments) {
-
+int publisher(struct Arguments arguments) {
+    printf("publisher!!!");
     return EXIT_SUCCESS;
 }

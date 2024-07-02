@@ -3,16 +3,16 @@
 //
 
 #include <arpa/inet.h>
+#include <netdb.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
-struct arguments {
-    char *role, *topic, *host;
-    unsigned short port;
-};
+#include "main.h"
 
-int subscriber(struct arguments arguments) {
-
+int subscriber(struct Arguments arguments) {
+    printf("%s!!!", arguments.role);
     return EXIT_SUCCESS;
 }

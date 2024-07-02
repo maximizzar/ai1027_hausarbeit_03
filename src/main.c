@@ -3,19 +3,14 @@
 //
 
 #include <argp.h>
-#include <arpa/inet.h>
-#include <netdb.h>
-#include <stdbool.h>
-#include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
+#include <stdlib.h>
+#include <stdio.h>
 
-#include "src/broker.c"
-#include "src/publisher.c"
-#include "src/subscriber.c"
-
-#define SOCKET_TYPE SOCK_DGRAM
-#define BUFFER_SIZE 4096
+#include "main.h"
+#include "broker.h"
+#include "publisher.h"
+#include "subscriber.h"
 
 const char *argp_program_version = "SMB 1.0.0";
 const char *argp_program_bug_address = "<mail@maximizzar.de>";
@@ -32,20 +27,14 @@ static struct argp_option options[] = {
         { 0 }
 };
 
-/* cli arguments */
-struct arguments {
-    char *role, *topic, *host;
-    unsigned short port;
-};
-
 /* option parsing */
 static error_t parse_option(int key, char *arg, struct argp_state *state) {
-    struct arguments *arguments = state->input;
+    struct Arguments *arguments = state->input;
 
     switch (key) {
         case 'r':
             if (strcmp(arg, "BROKER") == 0 || strcmp(arg, "PUB") == 0 || strcmp(arg, "SUB") == 0) {
-                arguments->role;
+                arguments->role = arg;
                 break;
             }
             printf("ERROR: Unknown role %s", arg);
@@ -54,12 +43,6 @@ static error_t parse_option(int key, char *arg, struct argp_state *state) {
         case 'p': arguments->port = strtol(arg, NULL, 0); break;
         case 'h': arguments->host = arg; break;
         default: return ARGP_ERR_UNKNOWN;
-
-
-    }
-    if (strcmp(arguments->role, "") == 0) {
-        argp_failure(state, 1, 0, "you need to provide an role");
-        exit(ARGP_ERR_UNKNOWN);
     }
     return EXIT_SUCCESS;
 }
@@ -69,13 +52,16 @@ static struct argp argp = { options, parse_option, NULL, doc };
 
 int main(int argc, char *argv[]) {
     /* Set arg defaults and then parse cli-arg into struct */
-    struct arguments arguments;
+    struct Arguments arguments;
     arguments.host = "::1";
     arguments.port = 8080;
     argp_parse (&argp, argc, argv, 0, 0, &arguments);
 
     if (strcmp(arguments.role, "BROKER") == 0) broker(arguments);
     else if (strcmp(arguments.role, "PUB") == 0) publisher(arguments);
-    else subscriber(arguments);
+    else if (strcmp(arguments.role, "SUB") == 0) subscriber(arguments);
+    else {
+        printf("unknown role %s! Please define a valid role.", arguments.role);
+    }
     return EXIT_SUCCESS;
 }
