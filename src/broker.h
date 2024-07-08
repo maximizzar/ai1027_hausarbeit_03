@@ -2,4 +2,4 @@
 // Created by maximizzar on 02.07.24.
 //
 
-int broker(struct Arguments arguments);
+_Noreturn int broker(struct Arguments arguments);
