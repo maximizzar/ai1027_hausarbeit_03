@@ -25,7 +25,7 @@ int publisher(struct Arguments arguments) {
     clientSocket.hints.ai_socktype = SOCKET_TYPE;
     clientSocket.hints.ai_flags = AI_NUMERICSERV;
 
-    if (get_ip_from_fqdn(clientSocket, arguments.port) < 0) {
+    if (get_ip_from_fqdn(&clientSocket, arguments.port) < 0) {
         printf("Can't connect to an address successfully.");
         exit(EXIT_FAILURE);
     }

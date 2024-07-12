@@ -12,7 +12,7 @@
 
 #include "main.h"
 
-int subscriber(struct Arguments arguments) {
+_Noreturn int subscriber(struct Arguments arguments) {
     /* Define client_socket, clear the memory and set their defaults */
     struct Socket clientSocket;
     memset(&clientSocket, 0, sizeof clientSocket);
@@ -25,9 +25,27 @@ int subscriber(struct Arguments arguments) {
     clientSocket.hints.ai_socktype = SOCKET_TYPE;
     clientSocket.hints.ai_flags = AI_NUMERICSERV;
 
-    if (get_ip_from_fqdn(clientSocket, arguments.port) < 0) {
+    if (get_ip_from_fqdn(&clientSocket, arguments.port) < 0) {
         printf("Can't connect to an address successfully.");
         exit(EXIT_FAILURE);
     }
-    return EXIT_SUCCESS;
+
+    // exit if no topic
+    if (arguments.topic == NULL) {
+        printf("A Subscriber needs to have an Topic set.\nPlease use --topic or -t and set one.");
+        exit(1);
+    }
+
+    // subscribe to topic
+    strcpy(clientSocket.buffer, "SUB ");
+    strcat(clientSocket.buffer, arguments.topic);
+    printf("%s", clientSocket.buffer);
+
+    while (true) {
+        while (read(clientSocket.client_fd, clientSocket.buffer, BUFFER_SIZE)) {
+            printf("%s", clientSocket.buffer);
+            memset(clientSocket.buffer, 0, BUFFER_SIZE);
+        }
+        perror("Failed to read from socket.");
+    }
 }
