@@ -20,6 +20,7 @@
 #include <unistd.h>
 
 #include <signal.h>
+#include<time.h>
 
 #define BUFFER_SIZE 1024
 #define MAX_ADDRESSES 10
@@ -37,11 +38,16 @@ enum Type {
     SUBSCRIBER,
 };
 
+struct Measurement {
+    time_t timestamp;
+    char data[BUFFER_SIZE - (BUFFER_SIZE / 4)];
+};
+
 /* Struct to represent Deserialized Data from Socket */
 struct SocketData {
     enum Type type;
     char topic[BUFFER_SIZE - (BUFFER_SIZE / 4)];
-    char data[BUFFER_SIZE - (BUFFER_SIZE / 4)];
+    struct Measurement measurement;
 };
 
 /* CircularBuffer to store Published data */
@@ -70,7 +76,7 @@ void print_measurements(CircularBuffer* buffer) {
     printf("Circular Buffer Contents: ");
     for (int i = buffer->index; i < buffer->size + buffer->index; i++) {
         int index = i % buffer->size; // Wrap around to the beginning of the buffer
-        printf("%s %s ", buffer->array[index].topic, buffer->array[index].data);
+        //printf("%s %s ", buffer->array[index].topic, buffer->array[index].measurement);
     }
     printf("\n");
 }

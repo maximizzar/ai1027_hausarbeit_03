@@ -57,6 +57,11 @@ char* role_to_string(enum Type role) {
             return "";
     }
 }
+char* timestamp_to_string(time_t timestamp) {
+    struct tm *local_time = localtime(&timestamp);
+    return asctime(local_time);
+}
+
 void print_connected_clients() {
     printf("Connected clients:\n");
     struct Client* current = client_list;
@@ -67,27 +72,27 @@ void print_connected_clients() {
 }
 
 /* Socket Serialization and Deserialization */
-int socket_serialization(char buffer[BUFFER_SIZE], struct SocketData *data) {
-    if (data == NULL) {
+int socket_serialization(char buffer[BUFFER_SIZE], struct SocketData *socket_data) {
+    if (socket_data == NULL) {
         printf("SocketData struct is Null");
         return EXIT_FAILURE;
     }
-    if (!data->type) {
+    if (!socket_data->type) {
         printf("Incorrect type set");
         return EXIT_FAILURE;
     }
-    if (strcmp(data->topic, "") == 0) {
+    if (strcmp(socket_data->topic, "") == 0) {
         printf("No Topic set");
         return EXIT_FAILURE;
     }
 
-    if (data->data[0] == '\0') {
-        sprintf(buffer, "%d \"%s\"", data->type, data->topic);
+    if (socket_data->measurement.data[0] == '\0') {
+        sprintf(buffer, "\"%d\" \"%s\"", socket_data->type, socket_data->topic);
     }
-    sprintf(buffer, "%d \"%s\" \"%s\"", data->type, data->topic, data->data);
+    sprintf(buffer, "\"%d\" \"%s\" \"%ld\" \"%s\"", socket_data->type, socket_data->topic, socket_data->measurement.timestamp, socket_data->measurement.data);
     return EXIT_SUCCESS;
 }
-int socket_deserialization(char buffer[BUFFER_SIZE], struct SocketData *data, bool verbose) {
+int socket_deserialization(char buffer[BUFFER_SIZE], struct SocketData *socket_data, bool verbose) {
     int count = 0;
 
     // Count the number of values in the buffer
@@ -96,7 +101,6 @@ int socket_deserialization(char buffer[BUFFER_SIZE], struct SocketData *data, bo
             count++;
         }
     }
-
     char** values = (char**)malloc(count * sizeof(char*));
 
     // Parse the values based on the count
@@ -110,10 +114,12 @@ int socket_deserialization(char buffer[BUFFER_SIZE], struct SocketData *data, bo
         token = strtok(NULL, "\"");
     }
 
-    data->type = strtol(values[0], NULL, 0);
+    if (values[0 != NULL]) {
+        socket_data->type = strtol(values[0], NULL, 0);
+    }
     int return_code = 0;
     if (values[1] != NULL) {
-        strcpy(data->topic, values[1]);
+        strcpy(socket_data->topic, values[1]);
     } else {
         if (verbose) {
             printf("Failed Deserialization: No Topic provided");
@@ -121,9 +127,10 @@ int socket_deserialization(char buffer[BUFFER_SIZE], struct SocketData *data, bo
         }
     }
     if (values[2] != NULL) {
-        strcpy(data->data, values[2]);
+        socket_data->measurement.timestamp = (time_t) strtol(values[2], NULL, 0);
+        strcpy(socket_data->measurement.data, values[3]);
     } else {
-        if (data->type == PUBLISHER) {
+        if (socket_data->type == PUBLISHER) {
             if (verbose) {
                 printf("Failed Deserialization: A Publisher must send data");
                 return_code = 1;
@@ -134,7 +141,7 @@ int socket_deserialization(char buffer[BUFFER_SIZE], struct SocketData *data, bo
     // Free allocated memory
     for (int i = 0; i < count; i++) {
         free(values[i]);
-        values[i] = NULL;
+        //values[i] = NULL;
     }
     free(values);
     return return_code;
@@ -316,8 +323,9 @@ int broker(struct Arguments arguments) {
                 printf("%s %s:%d subscribed topic %s\n",
                        role_to_string(socket_data.type), client_ip, client_port, socket_data.topic);
             } else if (socket_data.type == PUBLISHER) {
-                printf("%s %s:%d publishes under topic %s -> %s\n",
-                       role_to_string(socket_data.type), client_ip, client_port, socket_data.topic, socket_data.data);
+                printf("%s %s:%d publishes under topic %s at %s",
+                       role_to_string(socket_data.type), client_ip, client_port, socket_data.topic,
+                       timestamp_to_string(socket_data.measurement.timestamp));
             }
         }
 
@@ -348,11 +356,18 @@ int broker(struct Arguments arguments) {
                      */
                     socket_serialization(socket_buffer, latest_measurement);
                     struct sockaddr_in6 subscriber_address = {0};
-                    inet_pton(PF_INET6, current->ip, &subscriber_address.sin6_addr);
+
+                    // Convert subscriber's IP address to binary form
+                    if (inet_pton(PF_INET6, current->ip, &subscriber_address.sin6_addr) <= 0) {
+                        perror("Invalid subscriber's IP address");
+                        continue; // Skip to the next subscriber
+                    }
                     subscriber_address.sin6_port = client_port;
 
+                    printf("Sending to subscriber at [%s]:%d\n", current->ip, ntohs(subscriber_address.sin6_port));
                     if (sendto(sock_fd, socket_buffer, BUFFER_SIZE, 0, (const struct sockaddr *) &subscriber_address, sizeof(subscriber_address)) < 0) {
                         perror("Failed to send measurement to the Subscriber");
+                        printf("%d!!!\n", subscriber_address.sin6_port);
                     }
                 }
             }
@@ -391,21 +406,23 @@ int publisher(struct Arguments arguments) {
     address4.sin_port = htons(arguments.port);
     address4.sin_addr.s_addr = INADDR_ANY;
 
-    struct SocketData data = {0};
+    struct SocketData socket_data = {0};
 
     int i = 0;
     while(!interrupted) {
-        data.type = arguments.type;
-        strcpy(data.topic, arguments.topic);
-        //strcpy(data.data, "Hi Mom!");
-        sprintf(data.data, "%d", i);
+        socket_data.type = arguments.type;
+        strcpy(socket_data.topic, arguments.topic);
+        time_t now;
+        now = time(NULL);
+        printf("%s", timestamp_to_string(now));
+        socket_data.measurement.timestamp = now;
+        sprintf(socket_data.measurement.data, "%d", i);
         i++;
 
-
-        if (socket_serialization(buffer, &data) == 0) {
+        if (socket_serialization(buffer, &socket_data) == 0) {
             if (arguments.verbose) {
                 printf("Send \"%s\" under topic \"%s\" to %s %s:%d\n",
-                       data.data, data.topic,
+                       socket_data.measurement.data, socket_data.topic,
                        role_to_string(BROKER), arguments.host, arguments.port);
             }
 
@@ -415,7 +432,7 @@ int publisher(struct Arguments arguments) {
             }
         }
         sleep(3);
-        memset(&data, 0, sizeof data);
+        memset(&socket_data, 0, sizeof socket_data);
     }
     exit(EXIT_SUCCESS);
 }
@@ -450,7 +467,7 @@ int subscriber(struct Arguments arguments) {
     struct SocketData data = {0};
     data.type = arguments.type;
     strcpy(data.topic, arguments.topic);
-    strcpy(data.data, "");
+    strcpy(data.measurement.data, "");
 
     /* Send desired topic to server */
     if (socket_serialization(buffer, &data) == 0) {
@@ -465,6 +482,7 @@ int subscriber(struct Arguments arguments) {
     while(!interrupted) {
         recv(sock_fd, buffer, BUFFER_SIZE, 0);
         printf("%s", buffer);
+        memset(buffer, 0, BUFFER_SIZE);
     }
     close(sock_fd);
     exit(EXIT_SUCCESS);
