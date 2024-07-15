@@ -23,8 +23,7 @@
 
 #define BUFFER_SIZE 1024
 #define MAX_ADDRESSES 10
-
-#define MAX_CLIENTS 10
+#define MAX_SUBSCRIBER 64
 
 /* Program documentation. */
 const char *argp_program_version = "SMB 1.0.0";
@@ -45,7 +44,7 @@ struct SocketData {
     char data[BUFFER_SIZE - (BUFFER_SIZE / 4)];
 };
 
-/* CircularBuffer to store some ClientData */
+/* CircularBuffer to store Published data */
 typedef struct {
     struct SocketData* array;
     int size;
@@ -59,13 +58,15 @@ CircularBuffer* createCircularBuffer(int size) {
     buffer->index = 0;
     return buffer;
 }
-void addToCircularBuffer(CircularBuffer* buffer, struct SocketData data) {
+
+void add_measurement(CircularBuffer* buffer, struct SocketData data) {
     if (data.type == PUBLISHER) {
         buffer->array[buffer->index] = data;
         buffer->index = (buffer->index + 1) % buffer->size;
     }
 }
-void printCircularBuffer(CircularBuffer* buffer) {
+
+void print_measurements(CircularBuffer* buffer) {
     printf("Circular Buffer Contents: ");
     for (int i = buffer->index; i < buffer->size + buffer->index; i++) {
         int index = i % buffer->size; // Wrap around to the beginning of the buffer
@@ -74,8 +75,14 @@ void printCircularBuffer(CircularBuffer* buffer) {
     printf("\n");
 }
 
-// Structure to store client information
+struct SocketData* get_latest_measurement(CircularBuffer* buffer) {
+    int latestIndex = (buffer->index + buffer->size - 1) % buffer->size; // Calculate the index of the latest added element
+    return &(buffer->array[latestIndex]); // Return a pointer to the latest added element
+}
+
+/* Structure to store client information */
 struct Client {
+    struct sockaddr_in6 address;
     char ip[INET6_ADDRSTRLEN];
     unsigned short port;
     enum Type type;

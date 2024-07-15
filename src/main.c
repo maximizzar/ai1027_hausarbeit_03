@@ -234,14 +234,27 @@ void handle_sigint(int sig) {
 
 /* Main Functions */
 int broker(struct Arguments arguments) {
+    /* Check for unnecessary options */
+    if (arguments.topic) {
+        printf("The %s does not need an Topic. Consider removing the topic option.\n",
+               role_to_string(arguments.type));
+    }
+
+    if (arguments.verbose) {
+        printf("Server is in verbose mode!\n");
+    } else {
+        printf("Server is not in verbose mode!\n");
+    }
+
+    /* Data to create the socket */
     int sock_fd;
-    struct sockaddr_in6 server_addr;
-    struct sockaddr_in6 client_addr;
+    struct sockaddr_in6 server_addr = {0};
+    struct sockaddr_in6 client_addr = {0};
     socklen_t addr_len = sizeof(client_addr);
 
-    /* Data */
-    char buffer[BUFFER_SIZE];
-    struct SocketData data = {0};
+    /* Data buffer for socket communication */
+    char socket_buffer[BUFFER_SIZE];
+    struct SocketData socket_data = {0};
     CircularBuffer* measurements = createCircularBuffer(10);
 
     /* Create Socket */
@@ -267,21 +280,21 @@ int broker(struct Arguments arguments) {
     }
 
     if (arguments.verbose) {
-        printf("Server started. Waiting for clients...\n\n");
+        printf("Server started. Waiting for clients...\n");
     }
 
-    /* Send and recv loop */
+    /* Send and Recv loop */
     while (!interrupted) {
-        /* Receive data from clients */
-        recvfrom(sock_fd, buffer, BUFFER_SIZE, 0, (struct sockaddr *)&client_addr, &addr_len);
+        /* Receive socket_data from clients */
+        recvfrom(sock_fd, socket_buffer, BUFFER_SIZE, 0, (struct sockaddr *)&client_addr, &addr_len);
 
-        /* Deserialization from socket's buffer into data struct */
-        if (socket_deserialization(buffer, &data, arguments.verbose) != 0) {
+        /* Deserialization from socket's socket_buffer into socket_data struct */
+        if (socket_deserialization(socket_buffer, &socket_data, arguments.verbose) != 0) {
             if (!arguments.verbose) {
                 printf("Deserialization Failed: Ignore packet\n");
             }
-            memset(buffer, 0, BUFFER_SIZE);
-            memset(&data, 0, sizeof(data));
+            memset(socket_buffer, 0, BUFFER_SIZE);
+            memset(&socket_data, 0, sizeof(socket_data));
             continue;
         }
 
@@ -291,42 +304,61 @@ int broker(struct Arguments arguments) {
         int client_port = ntohs(client_addr.sin6_port);
 
         /* Add new client's to the linked list */
-        if (addClient(client_ip, client_port, data.type, data.topic) == 0) {
+        if (addClient(client_ip, client_port, socket_data.type, socket_data.topic) == 0) {
             if (arguments.verbose) {
                 print_connected_clients();
             }
         }
 
-        /* Show received data from the client */
+        /* Show received socket_data from the client */
         if (arguments.verbose) {
-            if (data.type == SUBSCRIBER) {
+            if (socket_data.type == SUBSCRIBER) {
                 printf("%s %s:%d subscribed topic %s\n",
-                       role_to_string(data.type), client_ip, client_port, data.topic);
-            } else if (data.type == PUBLISHER) {
+                       role_to_string(socket_data.type), client_ip, client_port, socket_data.topic);
+            } else if (socket_data.type == PUBLISHER) {
                 printf("%s %s:%d publishes under topic %s -> %s\n",
-                       role_to_string(data.type), client_ip, client_port, data.topic, data.data);
+                       role_to_string(socket_data.type), client_ip, client_port, socket_data.topic, socket_data.data);
             }
         }
 
-        addToCircularBuffer(measurements, data);
-        printCircularBuffer(measurements);
+        /*
+         * If socket_data came from a Publisher, save it in the CircularBuffer measurements
+         * Afterward clear socket buffer and socket data struct
+         */
+        add_measurement(measurements, socket_data);
+        memset(socket_buffer, 0, BUFFER_SIZE);
+        memset(&socket_data, 0, sizeof(socket_data));
 
-        memset(buffer, 0, BUFFER_SIZE);
-        memset(&data, 0, sizeof(data));
-
-        /* BROKER sends data from PUBLISHER to Subscribed clients. */
+        /* BROKER sends latest measurement in the CircularBuffer measurements to subscribed subscribers
+         *  1. Use a pointer to refer to the last measured value
+         *  2. Go through all saved clients
+         *  3. If it is a subscriber, check the topic
+         *  4. If the topic matches the root in whole or in part:
+         *      1. Pass the buffer and pointer to the socket_serialization function
+         *      2. Send the filled buffer with sendto and subscriber
+         */
         struct Client* current = client_list;
+        struct SocketData* latest_measurement = get_latest_measurement(measurements);
         while (current != NULL) {
             if (current->type == SUBSCRIBER) {
-                if (strcmp(current->topic, data.topic) == 0) {
-                    //printf("%s sends data \"%s\" to %s:%d\n",
-                    //       role_to_string(arguments.type),
-                    //       data.data, current->ip, current->port);
+                if (strcmp(current->topic, latest_measurement->topic) == 0) {
+                    /*
+                     * Fill buffer with latest measurement
+                     * Fill sockaddr_in6 struct with subscribers ip and port
+                     */
+                    socket_serialization(socket_buffer, latest_measurement);
+                    struct sockaddr_in6 subscriber_address = {0};
+                    inet_pton(PF_INET6, current->ip, &subscriber_address.sin6_addr);
+                    subscriber_address.sin6_port = client_port;
+
+                    if (sendto(sock_fd, socket_buffer, BUFFER_SIZE, 0, (const struct sockaddr *) &subscriber_address, sizeof(subscriber_address)) < 0) {
+                        perror("Failed to send measurement to the Subscriber");
+                    }
                 }
             }
             current = current->next;
         }
-        memset(&data, 0, sizeof data);
+        memset(&socket_data, 0, sizeof socket_data);
     }
     close(sock_fd);
     exit(EXIT_SUCCESS);
@@ -382,7 +414,7 @@ int publisher(struct Arguments arguments) {
                 perror("Failed to send msg to the Server\n");
             }
         }
-        sleep(1);
+        sleep(3);
         memset(&data, 0, sizeof data);
     }
     exit(EXIT_SUCCESS);
@@ -438,6 +470,7 @@ int subscriber(struct Arguments arguments) {
     exit(EXIT_SUCCESS);
 }
 int main(int argc, char *argv[]) {
+    /* SIGINT Handling for infinite-loops */
     struct sigaction sa;
     sa.sa_handler = handle_sigint;
     sigemptyset(&sa.sa_mask);
@@ -453,9 +486,17 @@ int main(int argc, char *argv[]) {
     arguments.verbose = false;
     argp_parse (&argp, argc, argv, 0, 0, &arguments);
 
+    /*
+     * Call correct function based of the app-type
+     * Also provide users options via the arguments struct
+     * If an app-type requires options,
+     * it will early return and tell the user.
+     * */
     if (arguments.type == BROKER) broker(arguments);
     else if (arguments.type == PUBLISHER) publisher(arguments);
     else if (arguments.type == SUBSCRIBER) subscriber(arguments);
+
+    /* Or tell the user to consider reading the help page */
     printf("try -? or --help\n");
     return EXIT_SUCCESS;
 }
