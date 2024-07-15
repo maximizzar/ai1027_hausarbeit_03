@@ -2,22 +2,19 @@
 // Created by maximizzar on 02.07.24.
 //
 
-#include <signal.h>
 #include "main.h"
-
-const char *argp_program_version = "SMB 1.0.0";
-const char *argp_program_bug_address = "<mail@maximizzar.de>";
-
-/* Program documentation. */
-static char doc[] = "SMB: Simple Message Broker";
 
 /* options */
 static struct argp_option options[] = {
-        {"role",    'r', "ROLE",  0, "BROKER, PUB, SUB" },
-        {"topic",   't', "TOPIC", 0, "Topic to write to"},
-        {"port",    'p', "PORT",  0, "Server Port" },
-        {"host",    'h', "HOST",  0, "Host"},
-        {"verbose", 'v', 0,       0, "More Verbose logging"},
+        {0,          0,   0,       0, "App Settings:"},
+        {"app-type", 'a', "TYPE",  0, "BROKER, PUB, SUB" },
+        {"topic",    't', "TOPIC", 0, "Topic to Read / Write from / to"},
+        {"verbose",  'v', 0,       0, "More Verbose logging"},
+
+        {0,          0,   0,       0,"Connection Settings:"},
+        {"host",     'h', "HOST",  0, "Host"},
+        {"port",     'p', "PORT",  0, "Server Port" },
+
         { 0 },
 };
 
@@ -26,15 +23,15 @@ static error_t parse_option(int key, char *arg, struct argp_state *state) {
     struct Arguments *arguments = state->input;
 
     switch (key) {
-        case 'r':
+        case 'a':
             if (strcmp(arg, "BROKER") == 0) {
-                arguments->role = BROKER;
+                arguments->type = BROKER;
             } else if (strcmp(arg, "PUB") == 0) {
-                arguments->role = PUBLISHER;
+                arguments->type = PUBLISHER;
             } else if(strcmp(arg, "SUB") == 0) {
-                arguments->role = SUBSCRIBER;
+                arguments->type = SUBSCRIBER;
             } else {
-                printf("ERROR: Unknown role %s", arg);
+                printf("ERROR: Unknown type %s", arg);
                 return EXIT_FAILURE;
             }
             break;
@@ -47,16 +44,11 @@ static error_t parse_option(int key, char *arg, struct argp_state *state) {
     return EXIT_SUCCESS;
 }
 
-/* publisher argp parser. */
+/* argp parser. */
 static struct argp argp = { options, parse_option, NULL, doc };
 
-struct Data {
-    enum Role role;
-    char topic[BUFFER_SIZE - (BUFFER_SIZE / 4)];
-    char data[BUFFER_SIZE - (BUFFER_SIZE / 4)];
-};
-
-char* role_to_string(enum Role role) {
+/* Helper to easily print stuff */
+char* role_to_string(enum Type role) {
     switch(role) {
         case BROKER: return "BROKER";
         case PUBLISHER: return "PUBLISHER";
@@ -65,15 +57,23 @@ char* role_to_string(enum Role role) {
             return "";
     }
 }
+void print_connected_clients() {
+    printf("Connected clients:\n");
+    struct Client* current = client_list;
+    while (current != NULL) {
+        printf("<$> %s:%d ~ %s\n", current->ip, current->port, role_to_string(current->type));
+        current = current->next;
+    }
+}
 
 /* Socket Serialization and Deserialization */
-int socket_serialization(char buffer[BUFFER_SIZE], struct Data *data) {
+int socket_serialization(char buffer[BUFFER_SIZE], struct SocketData *data) {
     if (data == NULL) {
-        printf("Data struct is Null");
+        printf("SocketData struct is Null");
         return EXIT_FAILURE;
     }
-    if (!data->role) {
-        printf("Incorrect role set");
+    if (!data->type) {
+        printf("Incorrect type set");
         return EXIT_FAILURE;
     }
     if (strcmp(data->topic, "") == 0) {
@@ -82,12 +82,12 @@ int socket_serialization(char buffer[BUFFER_SIZE], struct Data *data) {
     }
 
     if (data->data[0] == '\0') {
-        sprintf(buffer, "%d \"%s\"", data->role, data->topic);
+        sprintf(buffer, "%d \"%s\"", data->type, data->topic);
     }
-    sprintf(buffer, "%d \"%s\" \"%s\"", data->role, data->topic, data->data);
+    sprintf(buffer, "%d \"%s\" \"%s\"", data->type, data->topic, data->data);
     return EXIT_SUCCESS;
 }
-int socket_deserialization(char buffer[BUFFER_SIZE], struct Data *data, bool verbose) {
+int socket_deserialization(char buffer[BUFFER_SIZE], struct SocketData *data, bool verbose) {
     int count = 0;
 
     // Count the number of values in the buffer
@@ -110,7 +110,7 @@ int socket_deserialization(char buffer[BUFFER_SIZE], struct Data *data, bool ver
         token = strtok(NULL, "\"");
     }
 
-    data->role = strtol(values[0], NULL, 0);
+    data->type = strtol(values[0], NULL, 0);
     int return_code = 0;
     if (values[1] != NULL) {
         strcpy(data->topic, values[1]);
@@ -123,7 +123,7 @@ int socket_deserialization(char buffer[BUFFER_SIZE], struct Data *data, bool ver
     if (values[2] != NULL) {
         strcpy(data->data, values[2]);
     } else {
-        if (data->role == PUBLISHER) {
+        if (data->type == PUBLISHER) {
             if (verbose) {
                 printf("Failed Deserialization: A Publisher must send data");
                 return_code = 1;
@@ -134,13 +134,14 @@ int socket_deserialization(char buffer[BUFFER_SIZE], struct Data *data, bool ver
     // Free allocated memory
     for (int i = 0; i < count; i++) {
         free(values[i]);
+        values[i] = NULL;
     }
     free(values);
     return return_code;
 }
 
-// Function to add a new client to the linked list
-int addClient(char* ip, int port, enum Role type) {
+/* Function to add a new client to the linked list */
+int addClient(char* ip, int port, enum Type type, char* topic) {
     struct Client* current = client_list;
 
     // Check if the client already exists in the list
@@ -155,6 +156,11 @@ int addClient(char* ip, int port, enum Role type) {
     strcpy(newClient->ip, ip);
     newClient->port = port;
     newClient->type = type;
+
+    newClient->topic = (char*)malloc(strlen(topic) + 1);
+    if (newClient->topic != NULL) {
+        strcpy(newClient->topic, topic);
+    }
     newClient->next = client_list;
     client_list = newClient;
     return EXIT_SUCCESS;
@@ -226,23 +232,17 @@ void handle_sigint(int sig) {
     interrupted = 1;
 }
 
-void print_connected_clients() {
-    printf("Connected clients:\n");
-    struct Client* current = client_list;
-    while (current != NULL) {
-        printf("<$> %s:%d ~ %s\n", current->ip, current->port, role_to_string(current->type));
-        current = current->next;
-    }
-}
-
 /* Main Functions */
 int broker(struct Arguments arguments) {
     int sock_fd;
     struct sockaddr_in6 server_addr;
     struct sockaddr_in6 client_addr;
     socklen_t addr_len = sizeof(client_addr);
+
+    /* Data */
     char buffer[BUFFER_SIZE];
-    struct Data data = {0};
+    struct SocketData data = {0};
+    CircularBuffer* measurements = createCircularBuffer(10);
 
     /* Create Socket */
     if ((sock_fd = socket(PF_INET6, SOCK_DGRAM, 0)) < 0) {
@@ -270,8 +270,9 @@ int broker(struct Arguments arguments) {
         printf("Server started. Waiting for clients...\n\n");
     }
 
+    /* Send and recv loop */
     while (!interrupted) {
-        // Receive data from clients
+        /* Receive data from clients */
         recvfrom(sock_fd, buffer, BUFFER_SIZE, 0, (struct sockaddr *)&client_addr, &addr_len);
 
         /* Deserialization from socket's buffer into data struct */
@@ -279,7 +280,6 @@ int broker(struct Arguments arguments) {
             if (!arguments.verbose) {
                 printf("Deserialization Failed: Ignore packet\n");
             }
-            printf("1: %s 2: %s 3: %s\n", role_to_string(data.role), data.topic, data.data);
             memset(buffer, 0, BUFFER_SIZE);
             memset(&data, 0, sizeof(data));
             continue;
@@ -291,31 +291,42 @@ int broker(struct Arguments arguments) {
         int client_port = ntohs(client_addr.sin6_port);
 
         /* Add new client's to the linked list */
-        if (addClient(client_ip, client_port, data.role) == 0) {
+        if (addClient(client_ip, client_port, data.type, data.topic) == 0) {
             if (arguments.verbose) {
                 print_connected_clients();
             }
         }
 
+        /* Show received data from the client */
+        if (arguments.verbose) {
+            if (data.type == SUBSCRIBER) {
+                printf("%s %s:%d subscribed topic %s\n",
+                       role_to_string(data.type), client_ip, client_port, data.topic);
+            } else if (data.type == PUBLISHER) {
+                printf("%s %s:%d publishes under topic %s -> %s\n",
+                       role_to_string(data.type), client_ip, client_port, data.topic, data.data);
+            }
+        }
+
+        addToCircularBuffer(measurements, data);
+        printCircularBuffer(measurements);
+
+        memset(buffer, 0, BUFFER_SIZE);
+        memset(&data, 0, sizeof(data));
+
+        /* BROKER sends data from PUBLISHER to Subscribed clients. */
         struct Client* current = client_list;
         while (current != NULL) {
-            if (arguments.verbose) {
-                //printf("<$> %s:%d ~ %s\n", current->ip, current->port, role_to_string(current->type));
+            if (current->type == SUBSCRIBER) {
+                if (strcmp(current->topic, data.topic) == 0) {
+                    //printf("%s sends data \"%s\" to %s:%d\n",
+                    //       role_to_string(arguments.type),
+                    //       data.data, current->ip, current->port);
+                }
             }
             current = current->next;
         }
-
-        /* Show received data from the client */
-        if (arguments.verbose) {
-            if (data.role == SUBSCRIBER) {
-                printf("%s %s:%d subscribed topic %s\n",
-                       role_to_string(data.role), client_ip, client_port, data.topic);
-            } else if (data.role == PUBLISHER) {
-                printf("%s %s:%d publishes under topic %s -> %s\n",
-                       role_to_string(data.role), client_ip, client_port, data.topic, data.data);
-            }
-        }
-        memset(buffer, 0, BUFFER_SIZE);
+        memset(&data, 0, sizeof data);
     }
     close(sock_fd);
     exit(EXIT_SUCCESS);
@@ -323,7 +334,7 @@ int broker(struct Arguments arguments) {
 int publisher(struct Arguments arguments) {
     if (arguments.topic == NULL) {
         printf("A Publisher needs to have a topic\n");
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 
     int sock_fd = 0;
@@ -348,19 +359,27 @@ int publisher(struct Arguments arguments) {
     address4.sin_port = htons(arguments.port);
     address4.sin_addr.s_addr = INADDR_ANY;
 
-    struct Data data = {0};
+    struct SocketData data = {0};
 
+    int i = 0;
     while(!interrupted) {
-        data.role = arguments.role;
+        data.type = arguments.type;
         strcpy(data.topic, arguments.topic);
-        strcpy(data.data, "Hi Mom!");
+        //strcpy(data.data, "Hi Mom!");
+        sprintf(data.data, "%d", i);
+        i++;
+
 
         if (socket_serialization(buffer, &data) == 0) {
-            printf("%s\n", buffer);
+            if (arguments.verbose) {
+                printf("Send \"%s\" under topic \"%s\" to %s %s:%d\n",
+                       data.data, data.topic,
+                       role_to_string(BROKER), arguments.host, arguments.port);
+            }
 
             if (sendto(sock_fd, (const char *) buffer, BUFFER_SIZE, 0, (const struct sockaddr *) &address4,
                        sizeof(address4)) < 0) {
-                perror("Failed to send msg to the Server");
+                perror("Failed to send msg to the Server\n");
             }
         }
         sleep(1);
@@ -371,7 +390,7 @@ int publisher(struct Arguments arguments) {
 int subscriber(struct Arguments arguments) {
     if (arguments.topic == NULL) {
         printf("A Subscriber needs to have a topic\n");
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 
     int sock_fd = 0;
@@ -396,8 +415,8 @@ int subscriber(struct Arguments arguments) {
     address4.sin_port = htons(arguments.port);
     address4.sin_addr.s_addr = INADDR_ANY;
 
-    struct Data data = {0};
-    data.role = arguments.role;
+    struct SocketData data = {0};
+    data.type = arguments.type;
     strcpy(data.topic, arguments.topic);
     strcpy(data.data, "");
 
@@ -411,10 +430,10 @@ int subscriber(struct Arguments arguments) {
     }
 
     /* recv topic specific data and print it */
-    //while(!interrupted) {
-    //    recv(sock_fd, buffer, BUFFER_SIZE, 0);
-    //    printf("%s", buffer);
-    //}
+    while(!interrupted) {
+        recv(sock_fd, buffer, BUFFER_SIZE, 0);
+        printf("%s", buffer);
+    }
     close(sock_fd);
     exit(EXIT_SUCCESS);
 }
@@ -428,13 +447,15 @@ int main(int argc, char *argv[]) {
     /* Set arg defaults and then parse cli-arg into struct */
     struct Arguments arguments;
     memset(&arguments, 0, sizeof arguments);
+    arguments.type = -1;
     arguments.host = "::1";
     arguments.port = 8080;
     arguments.verbose = false;
     argp_parse (&argp, argc, argv, 0, 0, &arguments);
 
-    if (arguments.role == BROKER) broker(arguments);
-    else if (arguments.role == PUBLISHER) publisher(arguments);
-    else if (arguments.role == SUBSCRIBER) subscriber(arguments);
-    return EXIT_FAILURE;
+    if (arguments.type == BROKER) broker(arguments);
+    else if (arguments.type == PUBLISHER) publisher(arguments);
+    else if (arguments.type == SUBSCRIBER) subscriber(arguments);
+    printf("try -? or --help\n");
+    return EXIT_SUCCESS;
 }
