@@ -14,6 +14,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netdb.h>
+#include <sys/types.h>
 #include <sys/socket.h>
 
 #include <string.h>
@@ -88,6 +89,7 @@ struct SocketData* get_latest_measurement(CircularBuffer* buffer) {
 
 /* Structure to store client information */
 struct Client {
+    int sockfd;
     struct sockaddr_in6 address;
     char ip[INET6_ADDRSTRLEN];
     unsigned short port;

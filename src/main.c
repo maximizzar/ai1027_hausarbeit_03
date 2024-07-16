@@ -114,11 +114,11 @@ int socket_deserialization(char buffer[BUFFER_SIZE], struct SocketData *socket_d
         token = strtok(NULL, "\"");
     }
 
-    if (values[0 != NULL]) {
+    if (strcmp(values[0], "0") != 0) {
         socket_data->type = strtol(values[0], NULL, 0);
     }
     int return_code = 0;
-    if (values[1] != NULL) {
+    if (strcmp(values[1], "0") != 0) {
         strcpy(socket_data->topic, values[1]);
     } else {
         if (verbose) {
@@ -126,7 +126,7 @@ int socket_deserialization(char buffer[BUFFER_SIZE], struct SocketData *socket_d
             return_code = 1;
         }
     }
-    if (values[2] != NULL) {
+    if (strcmp(values[2], "0") != 0) {
         socket_data->measurement.timestamp = (time_t) strtol(values[2], NULL, 0);
         strcpy(socket_data->measurement.data, values[3]);
     } else {
@@ -141,7 +141,7 @@ int socket_deserialization(char buffer[BUFFER_SIZE], struct SocketData *socket_d
     // Free allocated memory
     for (int i = 0; i < count; i++) {
         free(values[i]);
-        //values[i] = NULL;
+        values[i] = NULL;
     }
     free(values);
     return return_code;
@@ -160,6 +160,10 @@ int addClient(char* ip, int port, enum Type type, char* topic) {
     }
 
     struct Client* newClient = (struct Client*)malloc(sizeof(struct Client));
+    if ((newClient->sockfd = socket(PF_INET6, SOCK_DGRAM, 0)) < 0) {
+        perror("Failed to Create Socket");
+        return EXIT_FAILURE;
+    }
     strcpy(newClient->ip, ip);
     newClient->port = port;
     newClient->type = type;
@@ -171,66 +175,6 @@ int addClient(char* ip, int port, enum Type type, char* topic) {
     newClient->next = client_list;
     client_list = newClient;
     return EXIT_SUCCESS;
-}
-
-/* Connect a client via v4 or v6 to the server (broker) */
-int connect_to_server(int sock_fd, char *host, unsigned short port,
-                      struct addrinfo hints, struct addrinfo *res,
-                      struct sockaddr_in6 *sockaddr, struct sockaddr_storage addresses[MAX_ADDRESSES]) {
-    int status = -1, address_count = 0;
-    struct hostent *server = {0};
-    char port_str[6];
-    snprintf(port_str, sizeof(port_str), "%hu", port); // Convert unsigned short to string
-
-    if ((status = getaddrinfo(host, port_str, &hints, &res)) != 0) {
-        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(status));
-        return EXIT_FAILURE;
-    }
-
-    struct addrinfo *p;
-    for (p = res; p != NULL && address_count < MAX_ADDRESSES; p = p->ai_next) {
-        memcpy(&addresses[address_count], p->ai_addr, p->ai_addrlen);
-        address_count++;
-    }
-
-    /*
-     * Loop over addresses provided by getaddrinfo
-     * - if an address works the loop breaks with a successful connection
-    * - if all addresses don't work, the client closes
-    */
-    for (int i = 0; i < address_count; i++) {
-        char ip_str[INET6_ADDRSTRLEN];
-        sockaddr->sin6_port = htons(port);
-
-        /* address in clientSocket.address_list is a v4 address and needs a v4 socket */
-        if (addresses[i].ss_family == PF_INET) {
-            sockaddr->sin6_family = PF_INET;
-            // Create v4 Socket
-            if ((sock_fd = socket(PF_INET, SOCK_DGRAM, 0)) < 0) {
-                perror("socket creation failed");
-                exit(EXIT_FAILURE);
-            }
-        }
-            /* address in clientSocket.address_list is a v6 address and needs a v6 socket */
-        else {
-            sockaddr->sin6_family = PF_INET6;
-            // Create v6 Socket
-            if ((sock_fd = socket(PF_INET6, SOCK_DGRAM, 0)) < 0) {
-                perror("socket creation failed");
-                exit(EXIT_FAILURE);
-            }
-        }
-
-        if ((connect(sock_fd, (struct sockaddr *) &addresses[i], sizeof(addresses[i]))) < 0) {
-            perror("Connection Failed");
-            if (i + 1 == address_count) {
-                exit(EXIT_FAILURE);
-            }
-            continue;
-        }
-        break;
-    }
-    return sock_fd;
 }
 
 /* Leave loops with SIGINT */
@@ -248,13 +192,16 @@ int broker(struct Arguments arguments) {
     }
 
     if (arguments.verbose) {
-        printf("Server is in verbose mode!\n");
+        printf("%s is in verbose mode!\n", role_to_string(BROKER));
     } else {
-        printf("Server is not in verbose mode!\n");
+        printf("%s is not in verbose mode!\n", role_to_string(BROKER));
     }
 
     /* Data to create the socket */
     int sock_fd;
+    fd_set readfds;
+    int max_sd, activity, sd;
+
     struct sockaddr_in6 server_addr = {0};
     struct sockaddr_in6 client_addr = {0};
     socklen_t addr_len = sizeof(client_addr);
@@ -292,95 +239,112 @@ int broker(struct Arguments arguments) {
 
     /* Send and Recv loop */
     while (!interrupted) {
-        /* Receive socket_data from clients */
-        recvfrom(sock_fd, socket_buffer, BUFFER_SIZE, 0, (struct sockaddr *)&client_addr, &addr_len);
+        FD_ZERO(&readfds);
+        FD_SET(sock_fd, &readfds);
+        max_sd = sock_fd;
 
-        /* Deserialization from socket's socket_buffer into socket_data struct */
-        if (socket_deserialization(socket_buffer, &socket_data, arguments.verbose) != 0) {
-            if (!arguments.verbose) {
-                printf("Deserialization Failed: Ignore packet\n");
-            }
-            memset(socket_buffer, 0, BUFFER_SIZE);
-            memset(&socket_data, 0, sizeof(socket_data));
-            continue;
-        }
-
-        /* Store client information */
-        char client_ip[INET6_ADDRSTRLEN];
-        inet_ntop(PF_INET6, &(client_addr.sin6_addr), client_ip, INET6_ADDRSTRLEN);
-        int client_port = ntohs(client_addr.sin6_port);
-
-        /* Add new client's to the linked list */
-        if (addClient(client_ip, client_port, socket_data.type, socket_data.topic) == 0) {
-            if (arguments.verbose) {
-                print_connected_clients();
+        // Add client sockets to the set
+        for (struct Client* current = client_list; current != NULL; current = current->next) {
+            sd = current->sockfd;
+            FD_SET(sd, &readfds);
+            if (sd > max_sd) {
+                max_sd = sd;
             }
         }
 
-        /* Show received socket_data from the client */
-        if (arguments.verbose) {
-            if (socket_data.type == SUBSCRIBER) {
-                printf("%s %s:%d subscribed topic %s\n",
-                       role_to_string(socket_data.type), client_ip, client_port, socket_data.topic);
-            } else if (socket_data.type == PUBLISHER) {
-                printf("%s %s:%d publishes under topic %s at %s",
-                       role_to_string(socket_data.type), client_ip, client_port, socket_data.topic,
-                       timestamp_to_string(socket_data.measurement.timestamp));
+        // Use select to monitor socket activity
+        //if (activity = select(max_sd + 1, &readfds, NULL, NULL, NULL) < 0) {
+        //    perror("Select error");
+        //    exit(EXIT_FAILURE);
+        //}
+
+        /* Handle incoming data from clients */
+        if (FD_ISSET(sock_fd, &readfds)) {
+            // Accept new client connections and add them to the linked list
+
+            /* Receive socket_data from clients */
+            recvfrom(sock_fd, socket_buffer, BUFFER_SIZE, 0, (struct sockaddr *)&client_addr, &addr_len);
+
+            /* Deserialization from socket's socket_buffer into socket_data struct */
+            if (socket_deserialization(socket_buffer, &socket_data, arguments.verbose) != 0) {
+                if (!arguments.verbose) {
+                    printf("Deserialization Failed: Ignore packet\n");
+                }
+                memset(socket_buffer, 0, BUFFER_SIZE);
+                memset(&socket_data, 0, sizeof(socket_data));
+                continue;
             }
-        }
 
-        /*
-         * If socket_data came from a Publisher, save it in the CircularBuffer measurements
-         * Afterward clear socket buffer and socket data struct
-         */
-        add_measurement(measurements, socket_data);
-        memset(socket_buffer, 0, BUFFER_SIZE);
-        memset(&socket_data, 0, sizeof(socket_data));
+            /* Store client information */
+            char client_ip[INET6_ADDRSTRLEN];
+            inet_ntop(PF_INET6, &(client_addr.sin6_addr), client_ip, INET6_ADDRSTRLEN);
+            int client_port = ntohs(client_addr.sin6_port);
 
-        /* BROKER sends latest measurement in the CircularBuffer measurements to subscribed subscribers
-         *  1. Use a pointer to refer to the last measured value
-         *  2. Go through all saved clients
-         *  3. If it is a subscriber, check the topic
-         *  4. If the topic matches the root in whole or in part:
-         *      1. Pass the buffer and pointer to the socket_serialization function
-         *      2. Send the filled buffer with sendto and subscriber
-         */
-        struct Client* current = client_list;
-        struct SocketData* latest_measurement = get_latest_measurement(measurements);
-        while (current != NULL) {
-            if (current->type == SUBSCRIBER) {
-                if (strcmp(current->topic, latest_measurement->topic) == 0) {
-                    /*
-                     * Fill buffer with latest measurement
-                     * Fill sockaddr_in6 struct with subscribers ip and port
-                     */
-                    socket_serialization(socket_buffer, latest_measurement);
-                    struct sockaddr_in6 subscriber_address = {0};
-
-                    // Convert subscriber's IP address to binary form
-                    if (inet_pton(PF_INET6, current->ip, &subscriber_address.sin6_addr) <= 0) {
-                        perror("Invalid subscriber's IP address");
-                        continue; // Skip to the next subscriber
-                    }
-                    subscriber_address.sin6_port = client_port;
-
-                    printf("Sending to subscriber at [%s]:%d\n", current->ip, ntohs(subscriber_address.sin6_port));
-                    if (sendto(sock_fd, socket_buffer, BUFFER_SIZE, 0, (const struct sockaddr *) &subscriber_address, sizeof(subscriber_address)) < 0) {
-                        perror("Failed to send measurement to the Subscriber");
-                        printf("%d!!!\n", subscriber_address.sin6_port);
-                    }
+            /* Add new client's to the linked list */
+            if (addClient(client_ip, client_port, socket_data.type, socket_data.topic) == 0) {
+                if (arguments.verbose) {
+                    print_connected_clients();
                 }
             }
-            current = current->next;
+
+            /* Show received socket_data */
+            if (arguments.verbose) {
+                if (socket_data.type == SUBSCRIBER) {
+                    printf("%s: %s:%d subscribed topic %s\n",
+                           role_to_string(socket_data.type), client_ip, client_port, socket_data.topic);
+                } else if (socket_data.type == PUBLISHER) {
+                    printf("%s: %s:%d publishes under topic %s at %s",
+                           role_to_string(socket_data.type), client_ip, client_port, socket_data.topic,
+                           timestamp_to_string(socket_data.measurement.timestamp));
+                }
+            }
+
+            /*
+             * If socket_data came from a Publisher, save it in the CircularBuffer measurements
+             * Afterward clear socket buffer and socket data struct
+             */
+            add_measurement(measurements, socket_data);
+            memset(socket_buffer, 0, BUFFER_SIZE);
+            memset(&socket_data, 0, sizeof(socket_data));
         }
-        memset(&socket_data, 0, sizeof socket_data);
+
+        /* Handle data from existing clients */
+        for (struct Client* current = client_list; current != NULL; current = current->next) {
+            sd = current->sockfd;
+            if (FD_ISSET(sd, &readfds) && current->type == SUBSCRIBER) {
+                // Read data from client socket
+                // Process the data and send responses back to subscribers
+
+                //for (int i = 0; measurements->array->topic[i]; i++) {
+                //    if (match_topic(current->topic, &measurements->array->topic[i])) {
+                        // if topic matches send data to subs.
+                        // due to that not working, it's in testing below!
+                //    }
+                //}
+
+                char response[] = "Message received!";
+                sendto(sd, response, BUFFER_SIZE, 0, (const struct sockaddr *) &current->address,
+                        sizeof(current->address));
+                printf("Message send\n");
+            } else {
+                if (arguments.verbose) {
+                    printf("%s: No %s, skip sending data\n",
+                           role_to_string(BROKER), role_to_string(SUBSCRIBER));
+                }
+            }
+        }
     }
     close(sock_fd);
     exit(EXIT_SUCCESS);
 }
 int publisher(struct Arguments arguments) {
     if (arguments.topic == NULL) {
-        printf("A Publisher needs to have a topic\n");
+        fprintf(stderr, "A %s needs to have a topic\n", role_to_string(arguments.type));
+        exit(EXIT_FAILURE);
+    }
+
+    if (strcmp(arguments.topic, "#") == 0) {
+        fprintf(stderr, "A %s can't have an wildcard on it's root", role_to_string(arguments.type));
         exit(EXIT_FAILURE);
     }
 
@@ -448,7 +412,7 @@ int subscriber(struct Arguments arguments) {
     struct sockaddr_in6 address = {0};
     struct sockaddr_storage addresses[MAX_ADDRESSES] = {0};
     struct addrinfo hints = {0}, *res = 0;
-    socklen_t address_length = sizeof(address4);
+    socklen_t address_length = sizeof(address);
 
     hints.ai_family = PF_UNSPEC;
     hints.ai_socktype = SOCK_DGRAM;
@@ -464,25 +428,27 @@ int subscriber(struct Arguments arguments) {
     address4.sin_port = htons(arguments.port);
     address4.sin_addr.s_addr = INADDR_ANY;
 
-    struct SocketData data = {0};
-    data.type = arguments.type;
-    strcpy(data.topic, arguments.topic);
-    strcpy(data.measurement.data, "");
+    struct SocketData socket_data = {0};
+    socket_data.type = arguments.type;
+    strcpy(socket_data.topic, arguments.topic);
 
     /* Send desired topic to server */
-    if (socket_serialization(buffer, &data) == 0) {
-        printf("%s\n", buffer);
-
-        if (sendto(sock_fd, (const char *) buffer, BUFFER_SIZE, 0, (const struct sockaddr *) &address4, address_length) < 0) {
+    if (socket_serialization(buffer, &socket_data) == 0) {
+        if (sendto(sock_fd, buffer, BUFFER_SIZE, 0, (const struct sockaddr *) &address4, sizeof(address4)) < 0) {
             perror("Failed to send msg to the Server");
+            exit(EXIT_FAILURE);
         }
     }
 
-    /* recv topic specific data and print it */
+    /* recv topic specific socket_data and print it */
     while(!interrupted) {
-        recv(sock_fd, buffer, BUFFER_SIZE, 0);
-        printf("%s", buffer);
         memset(buffer, 0, BUFFER_SIZE);
+        recv(sock_fd, buffer, BUFFER_SIZE, MSG_WAITALL);
+        printf("MSG: %s\n", buffer);
+
+        socket_deserialization(buffer, &socket_data, arguments.verbose);
+        printf("%s[%s] %s", timestamp_to_string(socket_data.measurement.timestamp),
+               socket_data.topic, socket_data.measurement.data);
     }
     close(sock_fd);
     exit(EXIT_SUCCESS);
