@@ -183,6 +183,73 @@ void handle_sigint(int sig) {
     interrupted = 1;
 }
 
+/* WIP (will probably never work :/) */
+int create_client_socket(const char *host, unsigned short port, struct sockaddr_in6 *server_addr) {
+    char port_str[6];
+    sprintf(port_str, "%u", port);
+    struct addrinfo hints, *res, *p;
+    int sock_fd;
+
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_UNSPEC;  // Use AF_INET6 to force IPv6
+    hints.ai_socktype = SOCK_DGRAM;
+    hints.ai_flags = AI_NUMERICSERV;
+
+    if (getaddrinfo(host, port_str, &hints, &res) != 0) {
+        fprintf(stderr, "Error getting address info\n");
+        return -1;
+    }
+
+    // Attempt to create socket and connect
+    for (p = res; p != NULL; p = p->ai_next) {
+        sock_fd = socket(p->ai_family, SOCK_DGRAM, 0);
+        if (sock_fd == -1) {
+            continue;
+        }
+
+        if (connect(sock_fd, p->ai_addr, p->ai_addrlen) != -1) {
+            char ip[INET6_ADDRSTRLEN];
+
+            inet_ntop(p->ai_family, &(((struct sockaddr_in*)(p->ai_addr))->sin_addr), ip, sizeof(ip));
+            printf("Connected to %s via %s\n", host, ip);
+
+            // Copy server address to the provided struct
+            memcpy(server_addr, p->ai_addr, p->ai_addrlen);
+
+            freeaddrinfo(res);
+            return sock_fd;
+        }
+        close(sock_fd);
+    }
+    freeaddrinfo(res);
+    return -1;
+}
+
+bool match_topic(char *sub, char *data) {
+    /*
+     * - sub is a topic from a sub in the linked list
+     * - data is a topic from a data point in the Circular Buffer
+     */
+
+    /* check if sub has a wildcard */
+    for (int i = 0; sub[i] != '\0'; i++) {
+        if (sub[i] == '#') {
+            if (sub[i + 1] != '\0') {
+                return false; // ignore incorrectly formated topics
+            }
+            if (strncmp(sub, data, i - 1) != 0) {
+                return false; // if sub does not data's sub-string
+            }
+            return true;
+        }
+    }
+    // if no wildcard found, the whole topics get matched
+    if (strcmp(sub, data) != 0) {
+        return false;
+    }
+    return true;
+}
+
 /* Main Functions */
 int broker(struct Arguments arguments) {
     /* Check for unnecessary options */
