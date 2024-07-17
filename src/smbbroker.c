@@ -3,16 +3,14 @@
 //
 
 #include "smbbroker.h"
-#include "main.h"
+#include "smbcommon.h"
 
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <arpa/inet.h>
 
 #define MAX_CLIENTS 5
-#define MAX_BUFFER_SIZE 1024
 
 struct Subscriber {
     char address[INET_ADDRSTRLEN];
@@ -20,9 +18,9 @@ struct Subscriber {
 };
 
 int main() {
-    int sockfd;
-    struct sockaddr_in servaddr, cliaddr;
-    char buffer[MAX_BUFFER_SIZE];
+    int sockfd, opt = 1;
+    struct sockaddr_in servaddr = {0}, cliaddr = {0};
+    char buffer[MAX_BUFFER_SIZE] = {0};
     char *hello = "Hello from server";
     struct Subscriber subscribers[MAX_CLIENTS];
     int num_subscribers = 0;
@@ -30,6 +28,14 @@ int main() {
     // Create UDP socket
     if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
         perror("Socket creation failed");
+        exit(EXIT_FAILURE);
+    }
+
+    //set master socket to allow multiple connections ,
+    //this is just a good habit, it will work without this
+    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (char *)&opt,
+                   sizeof(opt)) < 0 ) {
+        perror("setsockopt");
         exit(EXIT_FAILURE);
     }
 
@@ -46,11 +52,13 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    int len, n;
+    int n;
+    socklen_t len;
     len = sizeof(cliaddr);
 
     while(1) {
-        n = recvfrom(sockfd, (char *)buffer, MAX_BUFFER_SIZE, MSG_WAITALL, (struct sockaddr *)&cliaddr, &len);
+        n = recvfrom(sockfd, (char *)buffer, MAX_BUFFER_SIZE, MSG_WAITALL,
+                     (struct sockaddr *)&cliaddr, &len);
         buffer[n] = '\0';
         printf("Client message: %s\n", buffer);
 

@@ -1,13 +1,15 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+//
+// Created by maximizzar on 17.07.24.
+//
+
+#include "smbsubscribe.h"
+#include "smbcommon.h"
+
+
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
-
-#define MAX_BUFFER_SIZE 1024
-#define SERVER_PORT 8080
 
 void subscribeToBroker() {
     int sockfd;
@@ -25,13 +27,13 @@ void subscribeToBroker() {
     memset(&cliaddr, 0, sizeof(cliaddr));
 
     servaddr.sin_family = AF_INET;
-    servaddr.sin_addr.s_addr = INADDR_ANY;
-    servaddr.sin_port = htons(0); // Bind to port 0 for dynamic assignment
+    servaddr.sin_addr.s_addr = inet_addr(SERVER_IP);
+    servaddr.sin_port = htons(PORT);
 
-    if (bind(sockfd, (const struct sockaddr *)&servaddr, sizeof(servaddr)) < 0) {
-        perror("Bind failed");
-        exit(EXIT_FAILURE);
-    }
+
+    const char *message = "Hello, Server! Give me data.";
+    sendto(sockfd, message, strlen(message), MSG_CONFIRM,
+           (const struct sockaddr *)&servaddr, sizeof(servaddr));
 
     // Get the dynamically assigned port
     struct sockaddr_in local_address;
@@ -51,5 +53,5 @@ void subscribeToBroker() {
 int main() {
     subscribeToBroker();
 
-    return 0;
+    return EXIT_SUCCESS;
 }

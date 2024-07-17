@@ -6,6 +6,7 @@ if ! command -v gcc &> /dev/null; then
 fi
 
 # vars to make renaming easy
+common="smbcommon"
 broker="smbbroker"
 pub="smbpublish"
 sub="smbsubscribe"
@@ -15,23 +16,25 @@ if ! [ -d "bin" ]; then
         mkdir bin;
 fi
 
+clear
+
 # compile the three programs
 # attend the -test prefix
 # in case compilation fails
 
-gcc src/$broker.c -o bin/$broker-test
+gcc src/$broker.c src/$common.c -o bin/$broker-test
 if [ $? -eq 0 ]; then
         echo "$broker compiled!"
         mv bin/$broker-test bin/$broker
 fi
 
-gcc src/$pub.c -o bin/$pub-test
+gcc src/$pub.c src/$common.c -o bin/$pub-test
 if [ $? -eq 0 ]; then
         echo "$pub compiled!"
         mv bin/$pub-test bin/$pub
 fi
 
-gcc src/$sub.c -o bin/$sub-test
+gcc src/$sub.c src/$common.c -o bin/$sub-test
 if [ $? -eq 0 ]; then
         echo "$sub compiled!"
         mv bin/$sub-test bin/$sub

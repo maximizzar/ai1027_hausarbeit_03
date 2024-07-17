@@ -3,8 +3,18 @@
 tested with: _gcc (Debian 12.2.0-14) 12.2.0_
 
 ```
-gcc main.c -o smb
+
 ```
+
+Packet
+
+Message or Subscription
+
++----------+
+| 
+|
+|
++ 
 
 ## Default Values
 - host: ::1
