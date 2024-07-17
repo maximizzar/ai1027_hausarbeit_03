@@ -5,24 +5,16 @@
 #include "smbpublish.h"
 #include "smbcommon.h"
 
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
-
 void publishMessage(char buffer[MAX_BUFFER_SIZE], Message *message) {
     socket_serialization(buffer, message);
 
     int sockfd;
-    struct sockaddr_in servaddr;
+    struct sockaddr_in servaddr = {0};
 
-    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sockfd < 0) {
+    if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
         perror("Socket creation failed");
         exit(EXIT_FAILURE);
     }
-
-    memset(&servaddr, 0, sizeof(servaddr));
 
     servaddr.sin_family = AF_INET;
     servaddr.sin_addr.s_addr = inet_addr(SERVER_IP);
@@ -31,19 +23,26 @@ void publishMessage(char buffer[MAX_BUFFER_SIZE], Message *message) {
     sendto(sockfd, buffer, MAX_BUFFER_SIZE, MSG_CONFIRM,
            (const struct sockaddr *)&servaddr, sizeof(servaddr));
 
-    printf("Message \"%s\" published: on %s at %s\n",
-           message->data, message->topic,
-           timestamp_to_string(message->unix_timestamp));
+    printf("Published at %s on Topic %s => %s\n",
+           timestamp_to_string(message->unix_timestamp),
+           message->topic, message->data);
     close(sockfd);
 }
 
 int main() {
+    /*
+     * Options I'd like
+     * - sleep 1 - 60
+     * - server port
+     * - server host
+     * - verbose
+     */
     // Example message to publish
     char buffer[MAX_BUFFER_SIZE];
     Message message;
     message.unix_timestamp = time(NULL);
     strcpy(message.topic, "Hello World");
-    strcpy(message.data, "Hi Mom!");
+    strcpy(message.data, "Hi, Mom!");
     publishMessage(buffer, &message);
     return EXIT_SUCCESS;
 }
