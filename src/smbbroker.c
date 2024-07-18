@@ -78,10 +78,15 @@ int main(int argc, char *argv[]) {
                      (struct sockaddr *)&cliaddr, &len);
         buffer[n] = '\0';
 
-        socket_deserialization(buffer, &message);
+        if (socket_deserialization(buffer, &message) != 0) {
+            continue;
+        }
 
         /* if data is present, a publisher is assumed */
         if (strcmp(message.data, "") != 0) {
+            if (strstr(message.topic, "#") != NULL) {
+                continue;
+            }
             printf("Publication at %s on Topic %s => %s\n",
                    timestamp_to_string(message.unix_timestamp),
                    message.topic, message.data);
@@ -105,8 +110,12 @@ int main(int argc, char *argv[]) {
                 if (subscribers_current < SUBSCRIBERS_MAX) {
                     strcpy(subscribers[subscribers_current].address, inet_ntoa(cliaddr.sin_addr));
                     subscribers[subscribers_current].port = ntohs(cliaddr.sin_port);
+                    strcpy(subscribers[subscribers_current].topic, message.topic);
                     subscribers_current++;
-                    printf("New subscriber added: %s:%d\n", subscribers[subscribers_current - 1].address, subscribers[subscribers_current - 1].port);
+                    printf(":: New subscriber added: %s:%d => %s\n",
+                           subscribers[subscribers_current - 1].address,
+                           subscribers[subscribers_current - 1].port,
+                           subscribers[subscribers_current - 1].topic);
 
                     /*
                      * Loop over all entries in the circular buffer
@@ -121,22 +130,32 @@ int main(int argc, char *argv[]) {
                                (struct sockaddr *)&cliaddr, len);
                     }
                 } else {
-                    fprintf(stderr, "Max subscribers reached. Cannot add new subscriber.\n");
+                    if (cli_options.verbose) {
+                        fprintf(stderr, ":: Max subscribers reached. Cannot add new subscriber!\n");
+                    }
                 }
                 continue;
             }
         }
 
         if (subscribers_current == 0) {
-            //if no subscribers are connected, skip
+            if (cli_options.verbose) {
+                fprintf(stderr, ":: No Subscribers connected. Skip Sending Messages!\n");
+            }
             continue;
         }
 
         /* loop over all know subscribers */
+        printf(":: Start to send data to interested Subscribers!\n");
         for (int i = 0; i < subscribers_current; ++i) {
+            char log[200];
             memset(buffer, 0, MAX_BUFFER_SIZE);
             socket_serialization(buffer, &message);
 
+            if (cli_options.verbose) {
+                printf(":: :: Subscriber \"%s:%d\" requested Topic %s:\n",
+                       subscribers[i].address, subscribers[i].port, subscribers[i].topic);
+            }
             if (match_topic(subscribers[i].topic, message.topic)) {
                 struct sockaddr_in sub;
                 // Convert IP address from string to s_addr
@@ -146,10 +165,21 @@ int main(int argc, char *argv[]) {
                 }
                 sub.sin_port = htons(subscribers[i].port);
 
-                sendto(sockfd, buffer, MAX_BUFFER_SIZE, 0, (const struct sockaddr *)&sub, sizeof(sub));
-                printf("sendto: %hu\n", sub.sin_port);
+                if (sendto(sockfd, buffer, MAX_BUFFER_SIZE, 0, (const struct sockaddr *)&sub, sizeof(sub)) < 0) {
+                    perror("Failed to send message!");
+                } else {
+                    if (cli_options.verbose) {
+                        printf(":: :: :: Send %s under topic %s\n", message.data, message.topic);
+                    }
+                }
+            } else {
+                if (cli_options.verbose) {
+                    printf(":: ");
+                }
+                continue;
             }
+            printf(":: SUCCESS!\n\n");
         }
     }
-    return 0;
+    return EXIT_SUCCESS;
 }

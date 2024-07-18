@@ -8,7 +8,7 @@
 /*
  * Global vars for smbsubscribe
  */
-int sock_fd;
+int sock_fd = 0;
 Message message = {0};
 
 /* options */
@@ -26,16 +26,14 @@ static error_t parse_option(int key, char *arg, struct argp_state *state) {
         case 'p': cli_options->port = strtol(arg, NULL, 0); break;
         case 'v': cli_options->verbose = true; break;
         case ARGP_KEY_ARG:
-            if (state->arg_num > 1) {
-                printf("Too many arguments.\n");
-                return EXIT_FAILURE;
-            }
             if (state->arg_num == 0) {
                 strcpy((char *) server_hostname, arg);
-            } else {
+            } else if (state->arg_num == 1) {
                 strcpy(message.topic, arg);
+            } else {
+                argp_usage(state);
             }
-            return EXIT_SUCCESS;
+            break;
         default:
             return ARGP_ERR_UNKNOWN;
     }
@@ -47,7 +45,7 @@ static struct argp argp = { options, parse_option, args_doc, doc };
 
 int subscribeToBroker() {
     struct sockaddr_in servaddr = {0}, cliaddr= {0};
-    char buffer[MAX_BUFFER_SIZE];
+    char buffer[MAX_BUFFER_SIZE] = {0};
     int len = sizeof(servaddr);
 
     if ((sock_fd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
@@ -62,7 +60,6 @@ int subscribeToBroker() {
     //const char *message = "Hello, Server! Give me data.";
 
     message.unix_timestamp = time(NULL);
-    strcpy(message.topic, "Hello World");
     if (socket_serialization(buffer, &message) != 0) {
         return EXIT_FAILURE;
     }
@@ -92,6 +89,16 @@ int main(int argc, char *argv[]) {
     cli_options.port = 8080;
     cli_options.verbose = false;
     argp_parse(&argp, argc, argv, 0, 0, &cli_options);
+
+    if (strcmp((const char *) server_hostname, "") == 0) {
+        fprintf(stderr, "Provide a server hostname!\n");
+        return EXIT_FAILURE;
+    }
+
+    if (strcmp(message.topic, "") == 0) {
+        fprintf(stderr, "Provide a topic!\n");
+        return EXIT_FAILURE;
+    }
 
     subscribeToBroker();
 
