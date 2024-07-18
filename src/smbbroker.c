@@ -5,16 +5,40 @@
 #include "smbbroker.h"
 #include "smbcommon.h"
 
-int main() {
-    /*
-     * Options I'd like
-     * - server port
-     * - verbose
- */
+#include <argp.h>
+
+/* options */
+static struct argp_option options[] = {
+        {"verbose",  'v', 0,       0, "More Verbose logging"},
+        {"port",     'p', "PORT",  0, "Server Port" },
+        { 0 },
+};
+
+/* option parsing */
+static error_t parse_option(int key, char *arg, struct argp_state *state) {
+    CliOptions *options = state->input;
+
+    switch (key) {
+        case 'p': options->port = strtol(arg, NULL, 0); break;
+        case 'v': options->verbose = true; break;
+        default:
+            return ARGP_ERR_UNKNOWN;
+    }
+    return EXIT_SUCCESS;
+}
+
+/* argp parser. */
+static struct argp argp = { options, parse_option, args_doc, doc };
+
+int main(int argc, char *argv[]) {
+    CliOptions cli_options;
+    cli_options.port = 8080;
+    cli_options.verbose = false;
+    argp_parse(&argp, argc, argv, 0, 0, &cli_options);
+
     int sockfd, opt = 1;
     struct sockaddr_in servaddr = {0}, cliaddr = {0};
     char buffer[MAX_BUFFER_SIZE] = {0};
-    char *hello = "Hello from server";
     Subscriber subscribers[SUBSCRIBERS_MAX];
     CircularBuffer circularBuffer = *create_circular_buffer(CIRCULARBUFFERSIZE);
     int subscribers_current = 0;

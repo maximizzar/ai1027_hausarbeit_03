@@ -21,6 +21,8 @@
 
 #include <time.h>
 
+#include "argp.h"
+
 #define SERVER_IP "127.0.0.1"
 #define PORT 64002
 #define MAX_BUFFER_SIZE 1024
