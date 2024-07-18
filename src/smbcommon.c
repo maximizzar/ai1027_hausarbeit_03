@@ -47,12 +47,12 @@ int socket_serialization(char buffer[MAX_BUFFER_SIZE], Message *message) {
     memset(buffer, 0, MAX_BUFFER_SIZE);
 
     if (!message->unix_timestamp) {
-        fprintf(stderr, "Serialization Failed: No UNIX Timestamp provided!");
+        fprintf(stderr, "Serialization Failed: No UNIX Timestamp provided!\n");
         return EXIT_FAILURE;
     }
 
     if (strcmp(message->topic, "") == 0) {
-        fprintf(stderr, "Serialization Failed: No Topic provided!");
+        fprintf(stderr, "Serialization Failed: No Topic provided!\n");
         return EXIT_FAILURE;
     }
 
@@ -87,12 +87,12 @@ int socket_deserialization(char buffer[MAX_BUFFER_SIZE], Message *message) {
 
     /* Check if a correct number of values was found. */
     if (count == 0) {
-        fprintf(stderr, "Serialization Failed: No values in buffer!");
+        fprintf(stderr, "Serialization Failed: No values in buffer!\n");
         return EXIT_FAILURE;
     }
 
     if (count / 2 > 3) {
-        fprintf(stderr, "Serialization Failed: Too Many values in buffer!");
+        fprintf(stderr, "Serialization Failed: Too Many values in buffer!\n");
         return EXIT_FAILURE;
     }
 
@@ -112,7 +112,7 @@ int socket_deserialization(char buffer[MAX_BUFFER_SIZE], Message *message) {
 
     message->unix_timestamp = (time_t) strtol(values[0], NULL, 0);
     if (!message->unix_timestamp) {
-        fprintf(stderr, "Serialization Failed: Couldn't get UNIX Timestamp");
+        fprintf(stderr, "Serialization Failed: Couldn't get UNIX Timestamp!\n");
         // Free allocated memory
         for (int i = 0; i < count; i++) {
             free(values[i]);

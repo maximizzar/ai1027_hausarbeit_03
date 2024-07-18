@@ -46,8 +46,10 @@ static error_t parse_option(int key, char *arg, struct argp_state *state) {
 /* argp parser. */
 static struct argp argp = { options, parse_option, args_doc, doc };
 
-void publishMessage(char buffer[MAX_BUFFER_SIZE], Message *message) {
-    socket_serialization(buffer, message);
+int publishMessage(char buffer[MAX_BUFFER_SIZE]) {
+    if (socket_serialization(buffer, &message) != 0) {
+        return EXIT_FAILURE;
+    }
     struct sockaddr_in servaddr = {0};
 
     if ((sock_fd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
@@ -63,23 +65,23 @@ void publishMessage(char buffer[MAX_BUFFER_SIZE], Message *message) {
            (const struct sockaddr *)&servaddr, sizeof(servaddr));
 
     printf("Published at %s on Topic %s => %s\n",
-           timestamp_to_string(message->unix_timestamp),
-           message->topic, message->data);
+           timestamp_to_string(message.unix_timestamp),
+           message.topic, message.data);
     close(sock_fd);
+    return EXIT_SUCCESS;
 }
 
-int main() {
-    /*
-     * Options I'd like
-     * - sleep 1 - 60
-     * - server port
-     * - server host
-     * - verbose
-     */
+int main(int argc, char *argv[]) {
+    CliOptions cli_options;
+    cli_options.port = 8080;
+    cli_options.verbose = false;
+    cli_options.sleep = 4;
+    argp_parse(&argp, argc, argv, 0, 0, &cli_options);
+
     // Example message to publish
     char buffer[MAX_BUFFER_SIZE];
     message.unix_timestamp = time(NULL);
     strcpy(message.data, "Hi, Mom!");
-    publishMessage(buffer, &message);
+    publishMessage(buffer);
     return EXIT_SUCCESS;
 }

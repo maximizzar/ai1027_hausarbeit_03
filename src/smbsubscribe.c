@@ -20,11 +20,11 @@ static struct argp_option options[] = {
 
 /* option parsing */
 static error_t parse_option(int key, char *arg, struct argp_state *state) {
-    CliOptions *options = state->input;
+    CliOptions *cli_options = state->input;
 
     switch (key) {
-        case 'p': options->port = strtol(arg, NULL, 0); break;
-        case 'v': options->verbose = true; break;
+        case 'p': cli_options->port = strtol(arg, NULL, 0); break;
+        case 'v': cli_options->verbose = true; break;
         case ARGP_KEY_ARG:
             if (state->arg_num > 1) {
                 printf("Too many arguments.\n");
@@ -45,14 +45,14 @@ static error_t parse_option(int key, char *arg, struct argp_state *state) {
 /* argp parser. */
 static struct argp argp = { options, parse_option, args_doc, doc };
 
-void subscribeToBroker() {
+int subscribeToBroker() {
     struct sockaddr_in servaddr = {0}, cliaddr= {0};
     char buffer[MAX_BUFFER_SIZE];
     int len = sizeof(servaddr);
 
     if ((sock_fd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
         perror("Socket creation failed");
-        exit(EXIT_FAILURE);
+        return EXIT_FAILURE;
     }
 
     servaddr.sin_family = AF_INET;
@@ -63,10 +63,13 @@ void subscribeToBroker() {
 
     message.unix_timestamp = time(NULL);
     strcpy(message.topic, "Hello World");
-    socket_serialization(buffer, &message);
+    if (socket_serialization(buffer, &message) != 0) {
+        return EXIT_FAILURE;
+    }
     if (sendto(sock_fd, buffer, MAX_BUFFER_SIZE, MSG_CONFIRM,
                (const struct sockaddr *)&servaddr, sizeof(servaddr)) < 0) {
         perror("Subscribing to topic on broker failed!");
+        return EXIT_FAILURE;
     }
 
     // Get the dynamically assigned port
@@ -81,6 +84,7 @@ void subscribeToBroker() {
         printf("Message received from broker: %s\n", buffer);
     }
     close(sock_fd);
+    return EXIT_SUCCESS;
 }
 
 int main(int argc, char *argv[]) {
