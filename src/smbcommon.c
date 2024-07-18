@@ -25,13 +25,19 @@ void add_to_circular_buffer(CircularBuffer* circular_buffer, Message* message) {
  * - Topic a must-be from a Subscriber
  * - Topic b must-be from a Publisher
  */
-bool match_topic(char *a, char *b) {
+bool match_topic(char *sub, char *pub) {
+    int index = 0;
 
-    for (int i = 0; a[i] != '\0' && b[i] != '\0'; i++) {
-        if (a[i] != b[i]) {
-            if (a[i] == '#' && a[i + 1] == '\0') {
-                return true;
-            }
+    /* Get wildcard or last index of subscriber topic */
+    while (sub[index] != '\0') {
+        if (sub[index] == '#') {
+            break;
+        }
+        index++;
+    }
+
+    for (int i = 0; i < index; i++) {
+        if (pub[i] == '\0' || sub[i] != pub[i]) {
             return false;
         }
     }
