@@ -110,7 +110,7 @@ int main(int argc, char *argv[]) {
 
                     /*
                      * Loop over all entries in the circular buffer
-                     * and send the subscriber all missed data for it's topic (WIP)
+                     * and send the subscriber all missed data for its topic (WIP)
                      */
                     continue;
                     for (int j= circularBuffer.index; j < circularBuffer.size + circularBuffer.index; j++) {
@@ -125,6 +125,11 @@ int main(int argc, char *argv[]) {
                 }
                 continue;
             }
+        }
+
+        if (subscribers_current == 0) {
+            //if no subscribers are connected, skip
+            continue;
         }
 
         /* loop over all know subscribers */
