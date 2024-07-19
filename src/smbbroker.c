@@ -5,22 +5,13 @@
 #include "smbbroker.h"
 #include "smbcommon.h"
 
-#include <argp.h>
-
-/* options */
-static struct argp_option options[] = {
-        {"verbose",  'v', 0,       0, "More Verbose logging"},
-        {"port",     'p', "PORT",  0, "Server Port" },
-        { 0 },
-};
-
 /* option parsing */
 static error_t parse_option(int key, char *arg, struct argp_state *state) {
-    CliOptions *options = state->input;
+    CliOptions *cli_options = state->input;
 
     switch (key) {
-        case 'p': options->port = strtol(arg, NULL, 0); break;
-        case 'v': options->verbose = true; break;
+        case 'p': cli_options->port = strtol(arg, NULL, 0); break;
+        case 'v': cli_options->verbose = true; break;
         default:
             return ARGP_ERR_UNKNOWN;
     }
@@ -29,37 +20,46 @@ static error_t parse_option(int key, char *arg, struct argp_state *state) {
 
 /* argp parser. */
 static struct argp argp = { options, parse_option, args_doc, doc };
+/*
+ * - Initializes a socket for v6 only
+ * - Due to
+ */
 
 int main(int argc, char *argv[]) {
-    CliOptions cli_options;
+    int              reuse_address = 1, v6_only = 0;
+    char             buffer[MAX_BUFFER_SIZE] = {0};
+    char             port_str[6];
+    CliOptions       cli_options;
     cli_options.port = 8080;
     cli_options.verbose = false;
     argp_parse(&argp, argc, argv, 0, 0, &cli_options);
 
-    int sockfd, opt = 1;
-    struct sockaddr_in servaddr = {0}, cliaddr = {0};
-    char buffer[MAX_BUFFER_SIZE] = {0};
+    struct sockaddr_in6 servaddr = {0}, cliaddr = {0};
     Subscriber subscribers[SUBSCRIBERS_MAX];
-    CircularBuffer circularBuffer = *create_circular_buffer(CIRCULARBUFFERSIZE);
     int subscribers_current = 0;
 
     // Create UDP socket
-    if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+    if ((sockfd = socket(PF_INET6, SOCK_DGRAM, 0)) < 0) {
         perror("Socket creation failed");
         exit(EXIT_FAILURE);
     }
 
-    //set sockfd to allow multiple connections,
-    //this is just a good habit; it will work without this
-    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (char *)&opt,
-                   sizeof(opt)) < 0 ) {
-        perror("setsockopt");
+    /* allows to Reuse the Address */
+    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (char *)&reuse_address,
+                   sizeof(reuse_address)) < 0 ) {
+        perror("Failed to Set socket option");
         exit(EXIT_FAILURE);
     }
 
-    servaddr.sin_family = AF_INET;
-    servaddr.sin_addr.s_addr = INADDR_ANY;
-    servaddr.sin_port = htons(PORT);
+    /* Allows for v6 mapped v4 in a v6 socket */
+    if (setsockopt(sockfd, IPPROTO_IPV6, IPV6_V6ONLY, &v6_only, sizeof(v6_only)) == -1) {
+        perror("Failed to Set socket option");
+        exit(EXIT_FAILURE);
+    }
+
+    servaddr.sin6_family = PF_INET6;
+    servaddr.sin6_addr = in6addr_any;
+    servaddr.sin6_port = htons(cli_options.port);
 
     // Bind socket to port
     if (bind(sockfd, (const struct sockaddr *)&servaddr, sizeof(servaddr)) < 0) {
@@ -72,7 +72,7 @@ int main(int argc, char *argv[]) {
     len = sizeof(cliaddr);
 
     while(true) {
-        Message message;
+        Message message = {0};
         memset(buffer, 0, MAX_BUFFER_SIZE);
         n = recvfrom(sockfd, (char *)buffer, MAX_BUFFER_SIZE, MSG_WAITALL,
                      (struct sockaddr *)&cliaddr, &len);
@@ -90,12 +90,15 @@ int main(int argc, char *argv[]) {
             printf("Publication at %s on Topic %s => %s\n",
                    timestamp_to_string(message.unix_timestamp),
                    message.topic, message.data);
-            add_to_circular_buffer(&circularBuffer, &message);
         } else {
             // Check if subscriber is new
             int new_subscriber = 1;
-            for (int i = 0; i < subscribers_current; i++) {
-                if (strcmp(inet_ntoa(cliaddr.sin_addr), subscribers[i].address) == 0 && ntohs(cliaddr.sin_port) == subscribers[i].port) {
+            char client_ip[INET6_ADDRSTRLEN];
+
+            for (int i = -1; i < subscribers_current; i++) {
+                inet_ntop(PF_INET6, &cliaddr.sin6_addr, client_ip, sizeof(client_ip));
+                if (strcmp(client_ip, subscribers[i].address) == 0 &&
+                    ntohs(cliaddr.sin6_port) == subscribers[i].port) {
                     new_subscriber = 0;
                     break;
                 }
@@ -108,36 +111,23 @@ int main(int argc, char *argv[]) {
              */
             if (new_subscriber) {
                 if (subscribers_current < SUBSCRIBERS_MAX) {
-                    strcpy(subscribers[subscribers_current].address, inet_ntoa(cliaddr.sin_addr));
-                    subscribers[subscribers_current].port = ntohs(cliaddr.sin_port);
+                    memcpy(&subscribers[subscribers_current].addr, &cliaddr, sizeof (struct sockaddr));
+                    strcpy(subscribers[subscribers_current].address, client_ip);
+                    subscribers[subscribers_current].port = ntohs(cliaddr.sin6_port);
                     strcpy(subscribers[subscribers_current].topic, message.topic);
                     subscribers_current++;
-                    printf(":: New subscriber added: %s:%d => %s\n",
+                    printf(":: New subscriber added: [%s]:%d => %s\n",
                            subscribers[subscribers_current - 1].address,
                            subscribers[subscribers_current - 1].port,
                            subscribers[subscribers_current - 1].topic);
-
-                    /*
-                     * Loop over all entries in the circular buffer
-                     * and send the subscriber all missed data for its topic (WIP)
-                     */
-                    continue;
-                    for (int j= circularBuffer.index; j < circularBuffer.size + circularBuffer.index; j++) {
-                        int index = j % circularBuffer.size;
-                        memset(buffer, 0, MAX_BUFFER_SIZE);
-                        socket_serialization(buffer, &circularBuffer.message[index]);
-                        sendto(sockfd, (char *)buffer, MAX_BUFFER_SIZE, MSG_WAITALL,
-                               (struct sockaddr *)&cliaddr, len);
                     }
                 } else {
                     if (cli_options.verbose) {
                         fprintf(stderr, ":: Max subscribers reached. Cannot add new subscriber!\n");
                     }
                 }
-                continue;
-            }
+            continue;
         }
-
         if (subscribers_current == 0) {
             if (cli_options.verbose) {
                 fprintf(stderr, ":: No Subscribers connected. Skip Sending Messages!\n");
@@ -148,23 +138,16 @@ int main(int argc, char *argv[]) {
         /* loop over all know subscribers */
         printf(":: Start to send data to interested Subscribers!\n");
         for (int i = 0; i < subscribers_current; ++i) {
-            char log[200];
             memset(buffer, 0, MAX_BUFFER_SIZE);
             socket_serialization(buffer, &message);
 
             if (cli_options.verbose) {
-                printf(":: :: Subscriber \"%s:%d\" requested Topic %s:\n",
+                printf(":: :: Subscriber \"[%s]:%d\" requested Topic %s:\n",
                        subscribers[i].address, subscribers[i].port, subscribers[i].topic);
             }
             if (match_topic(subscribers[i].topic, message.topic)) {
-                struct sockaddr_in sub;
-                // Convert IP address from string to s_addr
-                if (inet_aton(subscribers[i].address, &sub.sin_addr) == 0) {
-                    perror("Invalid IP address");
-                    exit(EXIT_FAILURE);
-                }
-                sub.sin_port = htons(subscribers[i].port);
-
+                struct sockaddr_in6 sub;
+                memcpy(&sub, &subscribers[i], sizeof(sub));
                 if (sendto(sockfd, buffer, MAX_BUFFER_SIZE, 0, (const struct sockaddr *)&sub, sizeof(sub)) < 0) {
                     perror("Failed to send message!");
                 } else {
@@ -178,8 +161,8 @@ int main(int argc, char *argv[]) {
                 }
                 continue;
             }
-            printf(":: SUCCESS!\n\n");
         }
+        printf(":: SUCCESS!\n\n");
     }
     return EXIT_SUCCESS;
 }
