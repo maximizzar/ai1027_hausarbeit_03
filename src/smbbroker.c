@@ -20,10 +20,6 @@ static error_t parse_option(int key, char *arg, struct argp_state *state) {
 
 /* argp parser. */
 static struct argp argp = { options, parse_option, args_doc, doc };
-/*
- * - Initializes a socket for v6 only
- * - Due to
- */
 
 int main(int argc, char *argv[]) {
     int              reuse_address = 1, v6_only = 0;

@@ -88,7 +88,7 @@ int init_socket(const char *hostname, const char *port,
 
 int publish(char buffer[MAX_BUFFER_SIZE]) {
     Message message = {0};
-    strcpy(message.data, "Hi, Mom!");
+    sprintf(message.data, "%d", rand() % 101);
     strcpy(message.topic, topic);
     message.unix_timestamp = time(NULL);
 
@@ -117,6 +117,7 @@ int main(int argc, char *argv[]) {
                      cli_options.sleep = 0;
                      cli_options.legacy_ip = false;
 
+    srand(time(NULL));
     argp_parse(&argp, argc, argv, 0, 0, &cli_options);
     sprintf(port_str, "%hu", cli_options.port);
 
